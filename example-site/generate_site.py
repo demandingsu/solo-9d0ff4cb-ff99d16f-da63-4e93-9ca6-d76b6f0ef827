@@ -7,7 +7,15 @@
   P4 两次更正：先改时间、后延期无时间 -> 待核实
   P5 只有原始招标公告              -> 有效，沿用原截止时间
   P6 公告未公布任何截止时间        -> 未公布
+  P7 延期公告（无新时间）+ 侧栏旧公告（同项目旧截止时间）
+                                   -> 待核实，侧栏旧时间不得变成“有效”
+  P8 更正公告（新时间）+ 侧栏列出另一项目的旧公告
+                                   -> 有效取更正后新时间，不得跨项目归并
+  P9 正文缺项目编号、仅侧栏出现     -> 未核定，保留问题来源，不提供有效期限
+  P10 正文同一字段出现两个不同取值  -> 未核定，保留问题来源，不提供有效期限
+
 列表页分两页，通过“下一页”链接串联，验证分页抓取。
+侧栏（“相关公告”）在 P7 页面排在当前正文之前，复现字段被旧公告覆盖的问题。
 """
 from __future__ import annotations
 
@@ -63,7 +71,55 @@ NOTICES: list[tuple[str, str, str, str, str | None, str, str]] = [
     ("CG-2026-006", "档案馆数字化加工服务采购", "招标公告", "2026-10-12 10:40:00",
      None, "档案馆数字化加工服务采购招标公告",
      "本项目采用竞争性方式采购，具体投标安排详见后续通知。"),
+
+    # --- P7：延期公告声明延期但无新时间，侧栏却挂着同项目旧公告的旧截止时间 ---
+    ("CG-2026-007", "滨江公园绿化养护采购", "招标公告", "2026-10-09 09:00:00",
+     "2026-10-30 14:30:00", "滨江公园绿化养护采购招标公告",
+     "本项目养护周期为一年，欢迎符合要求的供应商投标。"),
+    ("CG-2026-007", "滨江公园绿化养护采购", "延期公告", "2026-10-24 16:00:00",
+     None, "滨江公园绿化养护采购延期公告",
+     "因评标场地调整，本项目投标截止时间延期，新的投标截止时间将另行公告。"),
+
+    # --- P8：更正公告给出新时间，侧栏列出另一个项目的旧公告 ---
+    ("CG-2026-008", "区级医院医用耗材采购", "招标公告", "2026-10-11 10:00:00",
+     "2026-10-27 09:00:00", "区级医院医用耗材采购招标公告",
+     "本项目分两个标包，允许同时投报。"),
+    ("CG-2026-008", "区级医院医用耗材采购", "更正公告", "2026-10-20 15:30:00",
+     "2026-11-12 10:00:00", "区级医院医用耗材采购更正公告",
+     "因技术参数调整，投标截止时间延期至本公告载明的新时间。"),
+    ("CG-2026-009", "老旧小区改造监理服务", "招标公告", "2026-10-05 08:30:00",
+     "2026-10-28 10:00:00", "老旧小区改造监理服务招标公告",
+     "本项目要求投标人具备相应监理资质。"),
+
+    # --- P9：正文未写项目编号，只有侧栏“相关公告”出现编号，无法确认归属 ---
+    ("CG-2026-010", "社区卫生服务中心改造采购", "招标公告", "2026-10-08 09:00:00",
+     "2026-10-24 09:00:00", "社区卫生服务中心改造采购招标公告",
+     "欢迎符合资格条件的供应商参加。"),
+    ("CG-2026-010", "社区卫生服务中心改造采购", "更正公告", "2026-10-18 11:20:00",
+     "2026-11-03 09:00:00", "社区卫生服务中心改造采购更正公告",
+     "现对采购需求作部分更正，投标截止时间调整为本公告所载时间。"),
+
+    # --- P10：正文同一字段出现两个不同取值，无法分清哪一条公告的期限 ---
+    ("CG-2026-011", "中小学课桌椅更新采购", "更正公告", "2026-10-22 09:40:00",
+     "2026-11-05 09:00:00", "中小学课桌椅更新采购更正公告",
+     "现将更正事项公告如下，请各投标人留意时间变化。"),
 ]
+
+# 侧栏“相关公告”展示的旧公告（引用 NOTICES 的下标，1 起）。
+# 详情页侧栏排在当前正文之前，旧公告的项目编号/类型/发布时间/截止时间都在其中。
+SIDEBARS: dict[int, list[int]] = {
+    13: [12],   # P7：延期公告页，侧栏是同项目早先的招标公告（旧截止时间）
+    15: [16],   # P8：更正公告页，侧栏是另一项目（CG-2026-009）的旧公告
+    18: [17],   # P9：正文缺项目编号，侧栏挂着 CG-2026-010 的旧招标公告
+}
+
+# 正文故意不输出“项目编号”字段的页面
+OMIT_PROJECT_NO = {18}
+
+# 正文额外出现一个与表格不同的“投标截止时间”取值（制造归属冲突）
+CONFLICT_DEADLINES: dict[int, str] = {
+    19: "2026-10-29 09:00:00",
+}
 
 FIELD_LABELS = [
     ("project_no", "项目编号"),
@@ -72,9 +128,42 @@ FIELD_LABELS = [
     ("deadline", "投标截止时间"),
 ]
 
+_EMPTY = ("", "", "", "", None, "", "")
+
 
 def detail_filename(index: int) -> str:
     return f"notice_{index:03d}.html"
+
+
+def _notice(index: int) -> tuple:
+    return NOTICES[index - 1] if 1 <= index <= len(NOTICES) else _EMPTY
+
+
+def build_sidebar(indices: list[int]) -> str:
+    """侧栏“相关公告”：旧公告的字段完整呈现，且在 DOM 中排在正文之前。"""
+    if not indices:
+        return ""
+    items = []
+    for index in indices:
+        project_no, project_name, notice_type, publish_time, deadline, title, _ = _notice(index)
+        items.append(
+            "      <li>"
+            f'<a href="../detail/{detail_filename(index)}">{html.escape(title)}</a>'
+            '        <div class="related-fields">'
+            f"<span>项目编号：{html.escape(project_no)}</span>"
+            f"<span>公告类型：{html.escape(notice_type)}</span>"
+            f"<span>发布时间：{html.escape(publish_time)}</span>"
+            + (f"<span>投标截止时间：{html.escape(str(deadline))}</span>" if deadline else "<span>投标截止时间：未载明</span>")
+            + "</div>"
+            "      </li>"
+        )
+    return f"""  <aside class="related-notices">
+    <h3>相关公告</h3>
+    <ul>
+{chr(10).join(items)}
+    </ul>
+  </aside>
+"""
 
 
 def build_detail(notice: tuple, index: int) -> str:
@@ -83,6 +172,8 @@ def build_detail(notice: tuple, index: int) -> str:
 
     # 打乱字段顺序，模拟不同页面模板；无新时间的延期页不输出截止时间字段
     labels = [item for item in FIELD_LABELS if not (item[0] == "deadline" and deadline is None)]
+    if index in OMIT_PROJECT_NO:
+        labels = [item for item in labels if item[0] != "project_no"]
     rng.shuffle(labels)
 
     rows = [f"<tr><th>项目名称</th><td>{html.escape(project_name)}</td></tr>"]
@@ -95,7 +186,17 @@ def build_detail(notice: tuple, index: int) -> str:
         }[key]
         rows.append(f"<tr><th>{label}</th><td>{html.escape(str(value))}</td></tr>")
     rng.shuffle(rows)
-    table = "\n      ".join(rows)
+    table = "\n        ".join(rows)
+
+    # 归属冲突页：正文再写一个与表格不同的截止时间，两个值都属于“投标截止时间”
+    conflict_html = ""
+    if index in CONFLICT_DEADLINES:
+        conflict_html = (
+            f'\n    <p class="conflict">投标截止时间：{html.escape(CONFLICT_DEADLINES[index])}，'
+            "请以本页通知为准。</p>"
+        )
+
+    sidebar = build_sidebar(SIDEBARS.get(index, []))
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -105,15 +206,17 @@ def build_detail(notice: tuple, index: int) -> str:
 <link rel="stylesheet" href="../assets/style.css">
 </head>
 <body>
-<div class="wrap">
-  <p class="crumb"><a href="../list/page_1.html">返回公告列表</a></p>
-  <h1>{html.escape(title)}</h1>
-  <table class="fields">
-      {table}
-  </table>
-  <div class="content">
-    <p>{html.escape(body)}</p>
-    <p>采购代理人请以本平台正式公告内容为准，按时完成投标文件递交。</p>
+<div class="wrap layout">
+{sidebar}  <div class="main">
+    <p class="crumb"><a href="../list/page_1.html">返回公告列表</a></p>
+    <h1>{html.escape(title)}</h1>
+    <table class="fields">
+        {table}
+    </table>
+    <div class="content">
+      <p>{html.escape(body)}</p>{conflict_html}
+      <p>采购代理人请以本平台正式公告内容为准，按时完成投标文件递交。</p>
+    </div>
   </div>
 </div>
 </body>
@@ -180,12 +283,21 @@ def build_index() -> str:
 CSS = """
 body { margin:0; background:#f5f7fa; font-family:"PingFang SC","Microsoft YaHei",sans-serif; color:#1f2937; }
 .wrap { max-width:960px; margin:24px auto; background:#fff; padding:28px 36px; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+.wrap.layout { display:flex; gap:28px; align-items:flex-start; }
+.wrap.layout .main { flex:1 1 auto; min-width:0; }
 h1 { font-size:20px; margin:0 0 18px; }
 .crumb a { color:#1d4ed8; text-decoration:none; font-size:13px; }
 table.fields { border-collapse:collapse; width:100%; margin:16px 0; }
 table.fields th, table.fields td { border:1px solid #d7dde5; padding:9px 12px; font-size:14px; text-align:left; }
 table.fields th { background:#f3f6fb; width:160px; white-space:nowrap; }
 .content { line-height:1.8; font-size:14px; }
+.content .conflict { color:#9a3412; }
+.related-notices { flex:0 0 250px; border:1px solid #ffd591; background:#fff7e6; border-radius:8px; padding:14px 16px; }
+.related-notices h3 { margin:0 0 10px; font-size:14px; color:#ad4e00; }
+.related-notices ul { margin:0; padding-left:16px; font-size:12px; }
+.related-notices li { margin-bottom:14px; }
+.related-notices a { color:#1d4ed8; text-decoration:none; }
+.related-fields { margin-top:5px; color:#7c5a1e; display:flex; flex-direction:column; gap:2px; }
 ul.notice-list { list-style:none; margin:0; padding:0; }
 ul.notice-list li { border-bottom:1px solid #eef1f5; }
 .notice-link { display:flex; justify-content:space-between; padding:13px 6px; text-decoration:none; color:#1f2937; }

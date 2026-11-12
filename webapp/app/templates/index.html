@@ -32,7 +32,12 @@
   .badge-有效 { background: #dcfce7; color: #166534; }
   .badge-待核实 { background: #ffedd5; color: #9a3412; }
   .badge-未公布 { background: #e2e8f0; color: #475569; }
+  .badge-未核定 { background: #fee2e2; color: #991b1b; }
   .deadline-pending { color: #9a3412; font-weight: 600; }
+  .deadline-unverified { color: #991b1b; font-weight: 600; }
+  .issue-box { margin-top: 8px; background: #fef2f2; border: 1px solid #fecaca;
+               border-radius: 6px; padding: 8px 10px; font-size: 12px; color: #991b1b; }
+  .issue-box ul { margin: 4px 0 0; padding-left: 18px; word-break: break-all; }
   .note { color: #64748b; font-size: 12px; margin-top: 4px; }
   details { margin-top: 8px; }
   details summary { cursor: pointer; color: #1d4ed8; font-size: 12px; }
@@ -43,6 +48,7 @@
   .tag { display: inline-block; background: #eef2ff; color: #3730a3; border-radius: 4px;
          padding: 1px 7px; font-size: 11px; margin-right: 6px; }
   .tag-ext { background: #fef3c7; color: #92400e; }
+  .tag-unverified { background: #fee2e2; color: #991b1b; }
   .errors { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; border-radius: 8px;
             padding: 12px 16px; font-size: 13px; }
   .errors ul { margin: 6px 0 0; padding-left: 20px; }
@@ -119,16 +125,26 @@
       <tbody>
         {% for project in results %}
         <tr>
-          <td style="white-space:nowrap;font-weight:600;">{{ project.project_no }}</td>
+          <td style="white-space:nowrap;font-weight:600;">{{ project.project_no }}
+              {% if project.project_no_is_candidate %}<span class="tag tag-unverified">编号来自侧栏，归属未核定</span>{% endif %}
+          </td>
           <td>{{ project.project_name }}</td>
           <td><span class="badge badge-{{ project.status.value }}">{{ project.status.value }}</span>
               <div class="note">{{ project.note }}</div>
+              {% if project.issue_sources %}
+              <div class="issue-box">
+                <strong>问题来源</strong>
+                <ul>{% for issue in project.issue_sources %}<li>{{ issue }}</li>{% endfor %}</ul>
+              </div>
+              {% endif %}
           </td>
           <td>
             {% if project.current_deadline %}
               <span class="current-deadline">{{ project.current_deadline }}</span>
             {% elif project.status.value == '待核实' %}
               <span class="deadline-pending current-deadline">待核实（旧截止时间已失效，不再展示）</span>
+            {% elif project.status.value == '未核定' %}
+              <span class="deadline-unverified current-deadline">本轮未核定（不提供有效期限）</span>
             {% else %}
               <span class="current-deadline" style="color:#64748b;">未公布</span>
             {% endif %}
@@ -141,11 +157,15 @@
                 <li>
                   {% if ann.notice_type %}<span class="tag">{{ ann.notice_type }}</span>{% endif %}
                   {% if ann.declares_extension %}<span class="tag tag-ext">声明延期</span>{% endif %}
+                  {% if ann.unverified %}<span class="tag tag-unverified">字段归属未核定</span>{% endif %}
                   <a href="/view?url={{ ann.url|urlencode }}" target="_blank">{{ ann.title or ann.url }}</a>
                   <div class="note">
                     发布时间：{{ ann.publish_time or '未识别' }} ｜
-                    原文截止时间：{% if ann.deadline %}{{ ann.deadline }}{% else %}未写明{% endif %}
+                    原文截止时间：{% if ann.deadline %}{{ ann.deadline }}{% elif ann.unverified %}未核定{% else %}未写明{% endif %}
                   </div>
+                  {% if ann.unverified_reason %}
+                  <div class="issue-box">{{ ann.unverified_reason }}</div>
+                  {% endif %}
                 </li>
                 {% endfor %}
               </ol>
